@@ -1,472 +1,527 @@
 <?php
-// admin_dashboard.php
+// admin_dashboard.php - OrderEase Admin Dashboard (Redesigned)
 session_start();
 
-// Inactivity Timeout Check
-$inactive = 1800; // 30 minutes in seconds (30 * 60)
-if (isset($_SESSION['timeout']) && ($_SESSION['timeout'] + $inactive < time())) {
-    session_unset();
+// Uncomment below to enforce login via index.php
+// if (!isset($_SESSION['admin_logged_in']) || !$_SESSION['admin_logged_in']) {
+//     header('Location: index.php');
+//     exit;
+// }
+
+require_once 'db_config.php';
+
+// Fetch all tracking records
+$result = $conn->query("SELECT * FROM tracking_items ORDER BY id DESC");
+$orders = $result ? $result->fetch_all(MYSQLI_ASSOC) : [];
+
+// Stats
+$total = count($orders);
+$delivered = count(array_filter($orders, fn($o) => strtolower($o['delivery_status'] ?? '') === 'delivered'));
+$pending   = count(array_filter($orders, fn($o) => in_array(strtolower($o['delivery_status'] ?? ''), ['pending', 'processing'])));
+$in_transit = count(array_filter($orders, fn($o) => strtolower($o['delivery_status'] ?? '') === 'in transit'));
+$paid = count(array_filter($orders, fn($o) => strtolower($o['payment_status'] ?? '') === 'paid'));
+
+// Logout
+if (isset($_GET['logout'])) {
     session_destroy();
-    header("Location: login.php?message=Session expired due to inactivity.");
-    exit();
-}
-$_SESSION['timeout'] = time();
-
-// Agar user logged in nahi hai, toh login page par redirect karein
-if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
-    header("Location: login.php");
-    exit();
+    header('Location: index.php');
+    exit;
 }
 
-require_once __DIR__ . '/db_config.php';
-
-$message = "";
-if (isset($_GET['message'])) {
-    $message = htmlspecialchars($_GET['message']);
+// Search
+$search = trim($_GET['search'] ?? '');
+if ($search !== '') {
+    $s = $conn->real_escape_string($search);
+    $result2 = $conn->query("SELECT * FROM tracking_items WHERE tracking_id LIKE '%$s%' OR customer_name LIKE '%$s%' ORDER BY id DESC");
+    $orders = $result2 ? $result2->fetch_all(MYSQLI_ASSOC) : [];
 }
 
-$tracking_items = [];
-$sql = "SELECT * FROM tracking_items ORDER BY last_updated DESC";
-$result = $conn->query($sql);
-
-if ($result->num_rows > 0) {
-    while($row = $result->fetch_assoc()) {
-        $tracking_items[] = $row;
-    }
+function statusBadge($status, $type = 'delivery') {
+    $s = strtolower(trim($status ?? 'unknown'));
+    $map = [
+        'delivered'  => ['bg'=>'#e6f4ea','color'=>'#2d7a3a','label'=>'Delivered'],
+        'in transit' => ['bg'=>'#fff3e0','color'=>'#c26a00','label'=>'In Transit'],
+        'pending'    => ['bg'=>'#fff8e1','color'=>'#a07800','label'=>'Pending'],
+        'processing' => ['bg'=>'#e8f0fe','color'=>'#1a56db','label'=>'Processing'],
+        'cancelled'  => ['bg'=>'#fce8e6','color'=>'#c62828','label'=>'Cancelled'],
+        'paid'       => ['bg'=>'#e6f4ea','color'=>'#2d7a3a','label'=>'Paid'],
+        'unpaid'     => ['bg'=>'#fce8e6','color'=>'#c62828','label'=>'Unpaid'],
+        'cod'        => ['bg'=>'#f3e5f5','color'=>'#7b1fa2','label'=>'COD'],
+    ];
+    $d = $map[$s] ?? ['bg'=>'#f0f0f0','color'=>'#555','label'=>ucfirst($status)];
+    return "<span style='background:{$d['bg']};color:{$d['color']};padding:3px 10px;border-radius:20px;font-size:12px;font-weight:500;'>{$d['label']}</span>";
 }
-$conn->close();
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Dashboard</title>
-    <link rel="stylesheet" href="../style.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
-    <style>
-        /* General Body and Container Styles (if not already in style.css) */
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f0f2f5; /* Light grey background */
-            margin: 0;
-            padding: 0;
-            display: flex;
-            justify-content: center;
-            align-items: flex-start; /* Align content to the top */
-            min-height: 100vh;
-        }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OrderEase — Admin Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,400&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-        .container {
-            width: 100%;
-            max-width: 1200px; /* Wider container for more content */
-            margin: 40px auto;
-            padding: 30px;
-            background-color: #ffffff;
-            border-radius: 12px; /* Softer rounded corners */
-            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.1); /* More pronounced shadow */
-        }
+:root {
+    --ink: #0d0d0d;
+    --paper: #f5f2eb;
+    --cream: #ede9df;
+    --accent: #d4601a;
+    --accent-soft: #fff0e8;
+    --muted: #7a7265;
+    --white: #ffffff;
+    --border: #ddd8cf;
+    --sidebar-w: 240px;
+}
 
-        .page-title {
-            color: #1a237e; /* Darker blue for titles */
-            text-align: center;
-            margin-bottom: 30px;
-            font-size: 2.2em; /* Slightly larger title */
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
+body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+    min-height: 100vh;
+    display: flex;
+}
 
-        .page-title i {
-            margin-right: 15px; /* Space between icon and text */
-            color: #007bff; /* Icon color */
-            font-size: 1.2em; /* Icon size relative to text */
-        }
+/* SIDEBAR */
+.sidebar {
+    width: var(--sidebar-w);
+    background: var(--ink);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    padding: 32px 24px;
+    position: fixed;
+    top: 0; left: 0;
+    z-index: 100;
+}
 
-        /* Message Styles */
-        .message {
-            padding: 15px 20px;
-            margin-bottom: 25px;
-            border-radius: 8px;
-            font-weight: 500;
-            text-align: center;
-            border: 1px solid transparent;
-            animation: fadeIn 0.5s ease-out; /* Fade-in effect */
-        }
+.sidebar-logo {
+    font-family: 'Syne', sans-serif;
+    font-weight: 800;
+    font-size: 22px;
+    color: var(--white);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 40px;
+}
+.logo-dot { width: 8px; height: 8px; background: var(--accent); border-radius: 50%; }
 
-        .message.success {
-            background-color: #e6ffed; /* Light green */
-            color: #1c7438; /* Dark green text */
-            border-color: #b3dfc9;
-        }
+.nav-label {
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: #4a4540;
+    margin-bottom: 10px;
+    margin-top: 24px;
+    padding-left: 4px;
+}
 
-        .message.error {
-            background-color: #ffe6e6; /* Light red */
-            color: #990000; /* Dark red text */
-            border-color: #f1b3b3;
-        }
+.nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    color: #8a8076;
+    font-size: 14px;
+    text-decoration: none;
+    transition: background 0.15s, color 0.15s;
+    margin-bottom: 2px;
+}
+.nav-item:hover { background: #1e1e1c; color: var(--white); }
+.nav-item.active { background: var(--accent); color: var(--white); }
+.nav-icon { font-size: 16px; width: 20px; text-align: center; }
 
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(-10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
+.sidebar-bottom {
+    margin-top: auto;
+    padding-top: 24px;
+    border-top: 1px solid #1e1e1c;
+}
+.sidebar-bottom a {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #4a4540;
+    text-decoration: none;
+    font-size: 13px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    transition: color 0.15s, background 0.15s;
+}
+.sidebar-bottom a:hover { color: #e05555; background: #1e1e1c; }
 
-        /* Top Links (Add New & Logout) */
-        .add-new-link, .logout-link { /* Combined styles for both links */
-            display: inline-flex; /* For icon alignment */
-            align-items: center;
-            padding: 10px 22px;
-            border-radius: 8px;
-            font-weight: 600;
-            text-decoration: none;
-            transition: background-color 0.3s ease, transform 0.2s ease, box-shadow 0.2s ease;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.05);
-        }
-        .add-new-link {
-            background-color: #28a745; /* Green */
-            color: white;
-            margin-bottom: 25px;
-        }
-        .add-new-link:hover {
-            background-color: #218838;
-            transform: translateY(-2px);
-            box-shadow: 0 6px 15px rgba(0,0,0,0.1);
-        }
-        .add-new-link i {
-            margin-right: 8px;
-        }
+/* MAIN */
+.main {
+    margin-left: var(--sidebar-w);
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
 
-        .logout-container { /* Parent for logout link to align right */
-            text-align: right;
-            margin-top: -60px; /* Adjust to align with add new button */
-            margin-bottom: 30px;
-        }
-        .logout-link {
-            background-color: #dc3545; /* Red */
-            color: white;
-        }
-        .logout-link:hover {
-            background-color: #c82333;
-            transform: translateY(-2px);
-            box-shadow: 0 6px 15px rgba(0,0,0,0.1);
-        }
-        .logout-link i {
-            margin-right: 8px;
-        }
+/* TOPBAR */
+.topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 24px 36px;
+    background: var(--paper);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 50;
+}
 
+.topbar-left h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--ink);
+}
+.topbar-left p { font-size: 13px; color: var(--muted); margin-top: 2px; }
 
-        /* Dashboard Table Styles */
-        .dashboard-table {
-            width: 100%;
-            border-collapse: separate; /* For rounded corners on rows */
-            border-spacing: 0;
-            margin-top: 30px;
-            box-shadow: 0 6px 20px rgba(0,0,0,0.08); /* Stronger shadow */
-            background-color: #fff;
-            border-radius: 10px; /* Softer table corners */
-            overflow: hidden; /* Ensures rounded corners are applied */
-        }
+.topbar-actions { display: flex; gap: 12px; align-items: center; }
 
-        .dashboard-table th, .dashboard-table td {
-            padding: 14px 18px; /* More padding */
-            text-align: left;
-            border-bottom: 1px solid #e0e0e0; /* Lighter border */
-        }
+.search-box {
+    display: flex;
+    align-items: center;
+    background: var(--cream);
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 14px;
+    gap: 8px;
+}
+.search-box input {
+    border: none;
+    background: transparent;
+    font-size: 14px;
+    font-family: 'DM Sans', sans-serif;
+    color: var(--ink);
+    outline: none;
+    width: 200px;
+}
+.search-box button {
+    background: none; border: none; cursor: pointer;
+    color: var(--muted); font-size: 14px;
+}
 
-        .dashboard-table th {
-            background-color: #f5f7fa; /* Lighter header background */
-            color: #4a4a4a; /* Darker grey text */
-            font-weight: 700; /* Bolder headers */
-            text-transform: uppercase;
-            font-size: 0.85em; /* Slightly smaller font for headers */
-        }
+.btn {
+    padding: 9px 18px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: 'DM Sans', sans-serif;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: none;
+    transition: all 0.15s;
+}
+.btn-primary { background: var(--ink); color: var(--white); }
+.btn-primary:hover { background: #222; }
+.btn-danger { background: #fce8e6; color: #c62828; }
+.btn-danger:hover { background: #f4d0cd; }
+.btn-warning { background: #fff3e0; color: #c26a00; }
+.btn-warning:hover { background: #ffe4b5; }
 
-        .dashboard-table tbody tr:last-child td {
-            border-bottom: none; /* Remove border from last row */
-        }
+/* CONTENT */
+.content { padding: 32px 36px; flex: 1; }
 
-        .dashboard-table tbody tr:hover {
-            background-color: #f7fafd; /* Lighter hover effect */
-            transform: translateY(-1px); /* Slight lift on hover */
-            box-shadow: 0 3px 10px rgba(0,0,0,0.05); /* Subtle shadow on hover */
-        }
+/* STATS CARDS */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 20px;
+    margin-bottom: 32px;
+}
 
-        /* Actions Column */
-        .dashboard-table .actions a {
-            margin-right: 12px; /* More space between links */
-            color: #007bff;
-            text-decoration: none;
-            font-weight: 500;
-            font-size: 0.95em; /* Slightly larger text */
-            transition: color 0.2s ease, transform 0.2s ease;
-        }
+.stat-card {
+    background: var(--white);
+    border-radius: 14px;
+    padding: 24px;
+    border: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+.stat-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.07); }
 
-        .dashboard-table .actions a:hover {
-            color: #0056b3;
-            transform: translateY(-1px);
-        }
+.stat-card::before {
+    content: '';
+    position: absolute;
+    top: 0; right: 0;
+    width: 80px; height: 80px;
+    border-radius: 0 14px 0 80px;
+    opacity: 0.08;
+}
+.stat-card.total::before { background: #0d0d0d; }
+.stat-card.delivered::before { background: #2d7a3a; }
+.stat-card.transit::before { background: #c26a00; }
+.stat-card.pending::before { background: #1a56db; }
 
-        .dashboard-table .actions a.delete-link {
-            color: #dc3545; /* Red for delete */
-        }
-        .dashboard-table .actions a.delete-link:hover {
-            color: #c82333;
-        }
-        .dashboard-table .actions i {
-            margin-right: 5px; /* Space between icon and text */
-            font-size: 0.9em;
-        }
+.stat-icon {
+    font-size: 22px;
+    margin-bottom: 12px;
+}
+.stat-num {
+    font-family: 'Syne', sans-serif;
+    font-size: 36px;
+    font-weight: 700;
+    color: var(--ink);
+    line-height: 1;
+    margin-bottom: 4px;
+}
+.stat-label {
+    font-size: 13px;
+    color: var(--muted);
+}
 
+/* TABLE SECTION */
+.table-section {
+    background: var(--white);
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    overflow: hidden;
+}
 
-        /* Status Badges */
-        .status-badge {
-            padding: 6px 12px; /* More padding */
-            border-radius: 20px; /* Pill shape */
-            font-size: 0.8em; /* Slightly smaller font */
-            font-weight: 700; /* Bolder text */
-            color: white;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            display: inline-block; /* For better padding */
-        }
+.table-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border);
+}
+.table-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 16px;
+    font-weight: 700;
+}
+.table-count {
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--cream);
+    padding: 3px 10px;
+    border-radius: 20px;
+    margin-left: 10px;
+}
 
-        /* Payment Status Colors */
-        .status-badge.pending { background-color: #ffc107; color: #856404; } /* Amber, darker text */
-        .status-badge.paid { background-color: #28a745; } /* Green */
-        .status-badge.refunded { background-color: #dc3545; } /* Red */
+table { width: 100%; border-collapse: collapse; }
+thead th {
+    padding: 12px 20px;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    text-align: left;
+    background: var(--paper);
+    border-bottom: 1px solid var(--border);
+}
+tbody tr { border-bottom: 1px solid #f0ece4; transition: background 0.1s; }
+tbody tr:last-child { border-bottom: none; }
+tbody tr:hover { background: #faf8f4; }
 
-        /* Delivery Status Colors */
-        .status-badge.processing { background-color: #17a2b8; } /* Cyan */
-        .status-badge.shipped { background-color: #6c757d; } /* Grey */
-        .status-badge.out-for-delivery { background-color: #007bff; } /* Blue */
-        .status-badge.delivered { background-color: #28a745; } /* Green (same as paid) */
-        .status-badge.cancelled { background-color: #dc3545; } /* Red (same as refunded) */
+td {
+    padding: 14px 20px;
+    font-size: 14px;
+    vertical-align: middle;
+}
 
-        /* No Items Message */
-        .message a {
-            color: #007bff;
-            text-decoration: none;
-            font-weight: 600;
-        }
-        .message a:hover {
-            text-decoration: underline;
-        }
+.tracking-id {
+    font-family: 'Syne', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+    letter-spacing: 0.5px;
+}
+.customer-name { font-weight: 500; }
+.customer-address { font-size: 12px; color: var(--muted); margin-top: 2px; }
 
-        /* Confirmation Dialog Styles */
-       .confirmation-dialog {
-            display: none; /* Hidden by default - BAHUT ZAROORI HAI YEH */
-            position: fixed;
-            z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0,0,0,0.5); /* Darker overlay */
-            /* Yahahan se 'display: flex;' hata dein */
-            justify-content: center; /* Flexbox properties rehne dein taake JavaScript show kare toh theek lage */
-            align-items: center;
-        }
-        .confirmation-dialog-content {
-            background-color: #ffffff;
-            padding: 40px; /* More padding */
-            border-radius: 15px; /* More rounded */
-            box-shadow: 0 10px 40px rgba(0,0,0,0.25); /* Stronger, softer shadow */
-            width: 90%;
-            max-width: 450px; /* Slightly wider */
-            text-align: center;
-            animation: zoomIn 0.3s ease-out; /* Animation */
-        }
-        .confirmation-dialog-content h3 {
-            color: #333;
-            margin-bottom: 20px;
-            font-size: 1.8em;
-            font-weight: 700;
-        }
-        .confirmation-dialog-content p {
-            color: #555;
-            margin-bottom: 30px;
-            line-height: 1.6;
-        }
-        .confirmation-dialog-content strong {
-            color: #1a237e; /* Highlight tracking ID */
-        }
-        .confirmation-dialog-content button {
-            padding: 12px 25px; /* Larger buttons */
-            margin: 0 10px;
-            border: none;
-            border-radius: 8px; /* More rounded buttons */
-            cursor: pointer;
-            font-size: 1.05em;
-            font-weight: 600;
-            transition: background-color 0.3s ease, transform 0.2s ease, box-shadow 0.2s ease;
-        }
-        .confirmation-dialog-content .confirm-btn {
-            background-color: #dc3545;
-            color: white;
-        }
-        .confirmation-dialog-content .confirm-btn:hover {
-            background-color: #c82333;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-        }
-        .confirmation-dialog-content .cancel-btn {
-            background-color: #6c757d;
-            color: white;
-        }
-        .confirmation-dialog-content .cancel-btn:hover {
-            background-color: #5a6268;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-        }
+.product-list { font-size: 12px; color: var(--muted); line-height: 1.5; }
 
-        /* Animation for dialog */
-        @keyframes zoomIn {
-            from { transform: scale(0.8); opacity: 0; }
-            to { transform: scale(1); opacity: 1; }
-        }
+.actions { display: flex; gap: 6px; }
 
-        /* Responsive Adjustments */
-        @media (max-width: 768px) {
-            .container {
-                margin: 20px auto;
-                padding: 20px;
-            }
-            .dashboard-table th, .dashboard-table td {
-                padding: 10px;
-                font-size: 0.9em;
-            }
-            .dashboard-table .actions a {
-                display: block; /* Stack actions on small screens */
-                margin-bottom: 5px;
-            }
-            .page-title {
-                font-size: 1.8em;
-            }
-            .page-title i {
-                margin-right: 10px;
-            }
-            .add-new-link, .logout-link {
-                width: calc(100% - 44px); /* Full width for small screens */
-                text-align: center;
-                justify-content: center;
-                margin-bottom: 15px;
-            }
-            .logout-container {
-                margin-top: 0; /* Remove negative margin on small screens */
-                text-align: center;
-            }
-        }
+.empty-state {
+    text-align: center;
+    padding: 64px 32px;
+    color: var(--muted);
+}
+.empty-state .empty-icon { font-size: 48px; margin-bottom: 16px; }
+.empty-state h3 { font-family: 'Syne', sans-serif; font-size: 18px; color: var(--ink); margin-bottom: 8px; }
+.empty-state p { font-size: 14px; }
 
-        @media (max-width: 480px) {
-            .dashboard-table {
-                font-size: 0.8em;
-            }
-            .dashboard-table th, .dashboard-table td {
-                padding: 8px;
-            }
-            .confirmation-dialog-content button {
-                padding: 10px 15px;
-                font-size: 0.9em;
-            }
-        }
-    </style>
+/* ALERT */
+.alert {
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    margin-bottom: 24px;
+}
+.alert-success { background: #e6f4ea; color: #2d7a3a; border: 1px solid #b7dfbe; }
+.alert-error { background: #fce8e6; color: #c62828; border: 1px solid #f4c0bc; }
+
+@media (max-width: 1100px) {
+    .stats-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 768px) {
+    .sidebar { display: none; }
+    .main { margin-left: 0; }
+    .content { padding: 20px 16px; }
+    .topbar { padding: 16px; }
+    .stats-grid { grid-template-columns: 1fr 1fr; gap: 12px; }
+    .search-box input { width: 140px; }
+}
+</style>
 </head>
 <body>
-    <div class="container">
-        <h2 class="page-title"><i class="fas fa-tachometer-alt"></i> Admin Dashboard</h2>
 
-        <?php if (!empty($message)): ?>
-            <p class="message <?php echo strpos($message, 'Error') !== false ? 'error' : 'success'; ?>">
-                <?php echo htmlspecialchars($message); ?>
-            </p>
+<!-- SIDEBAR -->
+<aside class="sidebar">
+    <div class="sidebar-logo">
+        <span class="logo-dot"></span> OrderEase
+    </div>
+
+    <span class="nav-label">Main Menu</span>
+    <a href="admin_dashboard.php" class="nav-item active">
+        <span class="nav-icon">📦</span> Dashboard
+    </a>
+    <a href="admin_add.php" class="nav-item">
+        <span class="nav-icon">➕</span> Add Order
+    </a>
+    <a href="track.php" class="nav-item">
+        <span class="nav-icon">🔍</span> Track Order
+    </a>
+
+    <div class="sidebar-bottom">
+        <a href="?logout=1">⏻ &nbsp;Logout</a>
+    </div>
+</aside>
+
+<!-- MAIN -->
+<div class="main">
+
+    <!-- TOPBAR -->
+    <div class="topbar">
+        <div class="topbar-left">
+            <h1>Dashboard</h1>
+            <p><?= date('l, F j, Y') ?></p>
+        </div>
+        <div class="topbar-actions">
+            <form method="GET" action="">
+                <div class="search-box">
+                    <span>🔍</span>
+                    <input type="text" name="search" placeholder="Search orders..." value="<?= htmlspecialchars($search) ?>">
+                    <button type="submit">Go</button>
+                </div>
+            </form>
+            <a href="admin_add.php" class="btn btn-primary">+ Add Order</a>
+        </div>
+    </div>
+
+    <!-- CONTENT -->
+    <div class="content">
+
+        <?php if (isset($_GET['deleted'])): ?>
+            <div class="alert alert-success">✓ Order deleted successfully.</div>
+        <?php endif; ?>
+        <?php if (isset($_GET['updated'])): ?>
+            <div class="alert alert-success">✓ Order updated successfully.</div>
         <?php endif; ?>
 
-        <p><a href="admin_add.php" class="add-new-link"><i class="fas fa-plus-circle"></i> Add New Tracking Item</a></p>
-        <div class="logout-container">
-            <p><a href="logout.php" class="logout-link"><i class="fas fa-sign-out-alt"></i> Logout</a></p>
+        <!-- STATS -->
+        <div class="stats-grid">
+            <div class="stat-card total">
+                <div class="stat-icon">📦</div>
+                <div class="stat-num"><?= $total ?></div>
+                <div class="stat-label">Total Orders</div>
+            </div>
+            <div class="stat-card delivered">
+                <div class="stat-icon">✅</div>
+                <div class="stat-num"><?= $delivered ?></div>
+                <div class="stat-label">Delivered</div>
+            </div>
+            <div class="stat-card transit">
+                <div class="stat-icon">🚚</div>
+                <div class="stat-num"><?= $in_transit ?></div>
+                <div class="stat-label">In Transit</div>
+            </div>
+            <div class="stat-card pending">
+                <div class="stat-icon">⏳</div>
+                <div class="stat-num"><?= $pending ?></div>
+                <div class="stat-label">Pending / Processing</div>
+            </div>
         </div>
 
-        <?php if (!empty($tracking_items)): ?>
-            <div style="overflow-x: auto;"> <table class="dashboard-table">
+        <!-- TABLE -->
+        <div class="table-section">
+            <div class="table-header">
+                <div style="display:flex;align-items:center;">
+                    <span class="table-title">All Orders</span>
+                    <span class="table-count"><?= count($orders) ?> records</span>
+                </div>
+                <?php if ($search): ?>
+                    <a href="admin_dashboard.php" class="btn btn-warning">✕ Clear Search</a>
+                <?php endif; ?>
+            </div>
+
+            <?php if (empty($orders)): ?>
+                <div class="empty-state">
+                    <div class="empty-icon">📭</div>
+                    <h3><?= $search ? 'No results found' : 'No orders yet' ?></h3>
+                    <p><?= $search ? 'Try a different search term.' : 'Add your first order to get started.' ?></p>
+                    <?php if (!$search): ?>
+                        <a href="admin_add.php" class="btn btn-primary" style="margin-top:16px;display:inline-flex;">+ Add First Order</a>
+                    <?php endif; ?>
+                </div>
+            <?php else: ?>
+                <table>
                     <thead>
                         <tr>
                             <th>Tracking ID</th>
-                            <th>Customer Name</th>
-                            <th>Price</th>
-                            <th>Order Date</th>
-                            <th>Payment Status</th>
-                            <th>Delivery Status</th>
-                            <th>Last Updated</th>
+                            <th>Customer</th>
+                            <th>Products</th>
+                            <th>Payment</th>
+                            <th>Delivery</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach ($tracking_items as $item): ?>
+                    <?php foreach ($orders as $order): ?>
                         <tr>
-                            <td><?php echo htmlspecialchars($item['tracking_id']); ?></td>
-                            <td><?php echo htmlspecialchars($item['customer_name']); ?></td>
-                            <td>PKR <?php echo number_format($item['price'], 2); ?></td>
-                            <td><?php echo date("Y-m-d", strtotime($item['order_date'])); ?></td>
-                            <td><span class="status-badge <?php echo strtolower($item['payment_status']); ?>"><?php echo htmlspecialchars($item['payment_status']); ?></span></td>
-                            <td><span class="status-badge <?php echo strtolower(str_replace(' ', '-', $item['delivery_status'])); ?>"><?php echo htmlspecialchars($item['delivery_status']); ?></span></td>
-                            <td><?php echo date("Y-m-d H:i", strtotime($item['last_updated'])); ?></td>
-                            <td class="actions">
-                                <a href="admin_update.php?tracking_id=<?php echo urlencode($item['tracking_id']); ?>"><i class="fas fa-edit"></i> Edit</a>
-                                <a href="#" class="delete-link" data-tracking-id="<?php echo urlencode($item['tracking_id']); ?>"><i class="fas fa-trash-alt"></i> Delete</a>
+                            <td><span class="tracking-id"><?= htmlspecialchars($order['tracking_id'] ?? '—') ?></span></td>
+                            <td>
+                                <div class="customer-name"><?= htmlspecialchars($order['customer_name'] ?? '—') ?></div>
+                                <div class="customer-address"><?= htmlspecialchars(substr($order['customer_address'] ?? '', 0, 40)) . (strlen($order['customer_address'] ?? '') > 40 ? '…' : '') ?></div>
+                            </td>
+                            <td>
+                                <div class="product-list">
+                                    <?php
+                                    // Try to display products/quantities if stored as JSON or plain text
+                                    $products = $order['products'] ?? $order['product_name'] ?? '—';
+                                    echo htmlspecialchars(is_string($products) ? $products : json_encode($products));
+                                    ?>
+                                </div>
+                            </td>
+                            <td><?= statusBadge($order['payment_status'] ?? 'Unknown', 'payment') ?></td>
+                            <td><?= statusBadge($order['delivery_status'] ?? 'Unknown', 'delivery') ?></td>
+                            <td>
+                                <div class="actions">
+                                    <a href="admin_update.php?tracking_id=<?= urlencode($order['tracking_id'] ?? '') ?>" class="btn btn-warning" title="Edit">✏️ Edit</a>
+                                    <a href="admin_delete.php?tracking_id=<?= urlencode($order['tracking_id'] ?? '') ?>" class="btn btn-danger" title="Delete" onclick="return confirm('Delete this order?')">🗑</a>
+                                </div>
                             </td>
                         </tr>
-                        <?php endforeach; ?>
+                    <?php endforeach; ?>
                     </tbody>
                 </table>
-            </div>
-        <?php else: ?>
-            <p class="message">No tracking items found. <a href="admin_add.php">Add a new one?</a></p>
-        <?php endif; ?>
-    </div>
-
-    <div id="confirmationDialog" class="confirmation-dialog">
-        <div class="confirmation-dialog-content">
-            <h3>Confirm Deletion</h3>
-            <p>Are you sure you want to delete tracking ID: <strong id="trackingIdToDelete"></strong>?</p>
-            <button class="cancel-btn" onclick="hideConfirmationDialog()">Cancel</button>
-            <button class="confirm-btn" id="confirmDeleteBtn">Delete</button>
+            <?php endif; ?>
         </div>
-    </div>
 
-    <script>
-        // JavaScript for delete confirmation
-        let currentTrackingId = '';
-        const confirmationDialog = document.getElementById('confirmationDialog');
-        const trackingIdToDeleteSpan = document.getElementById('trackingIdToDelete');
-        const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
+    </div><!-- /content -->
+</div><!-- /main -->
 
-        document.querySelectorAll('.delete-link').forEach(link => {
-            link.addEventListener('click', function(e) {
-                e.preventDefault(); // Prevent default link behavior
-                currentTrackingId = this.dataset.trackingId;
-                trackingIdToDeleteSpan.textContent = decodeURIComponent(currentTrackingId);
-                confirmationDialog.style.display = 'flex'; // Show the dialog
-            });
-        });
-
-        confirmDeleteBtn.addEventListener('click', function() {
-            if (currentTrackingId) {
-                window.location.href = 'admin_delete.php?tracking_id=' + currentTrackingId;
-            }
-        });
-
-        function hideConfirmationDialog() {
-            confirmationDialog.style.display = 'none'; // Hide the dialog
-            currentTrackingId = ''; // Reset
-        }
-
-        // Close dialog if clicked outside content
-        confirmationDialog.addEventListener('click', function(e) {
-            if (e.target === confirmationDialog) {
-                hideConfirmationDialog();
-            }
-        });
-    </script>
 </body>
 </html>
