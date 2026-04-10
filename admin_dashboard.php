@@ -71,7 +71,7 @@ function statusBadge($status, $type = 'delivery') {
     --muted: #7a7265;
     --white: #ffffff;
     --border: #ddd8cf;
-    --sidebar-w: 240px;
+    --sidebar-w: 280px;
 }
 
 body {
