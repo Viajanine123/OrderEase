@@ -394,6 +394,9 @@ td {
     <a href="track.php" class="nav-item">
         <span class="nav-icon">🔍</span> Track Order
     </a>
+    <a href="admin_history.php" class="nav-item">
+    <span class="nav-icon">🗂️</span> Order History
+    </a>
 
     <div class="sidebar-bottom">
         <a href="?logout=1">⏻ &nbsp;Logout</a>
